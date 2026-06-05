@@ -125,6 +125,22 @@ python experiment/lamagic2/trn_pure_tranformer_6comp.py
 
 ---
 
+## Testing
+
+A lightweight smoke test is provided to verify that the repository is set up
+correctly without requiring the full training stack (PyTorch, transformers, a
+GPU, or model checkpoints). It exercises the self-contained graph utilities in
+`topo_data_util`.
+
+Install the test requirements (only `numpy` and `pytest` are needed) and run:
+
+```bash
+pip install numpy pytest
+pytest tests/
+```
+
+---
+
 ## Citation
 
 If you use this work in your research, please cite our papers:
