@@ -18,8 +18,9 @@ They validate two core pieces of the repository:
    forward/backward step (with the float ``vout``/``eff``/duty-cycle prefixes)
    produces a finite loss and gradients.
 
-Network access is required. If the Hub cannot be reached the tests skip with a
-clear message rather than failing.
+Network access to the Hugging Face Hub is required. Both the dataset and the
+``google/flan-t5-base`` artifacts are public, so no token/API key is needed.
+The tests download them directly and fail loudly if the Hub is unreachable.
 
 Run with::
 
@@ -77,17 +78,19 @@ def _input_components(input_field):
 
 @pytest.fixture(scope="session")
 def sfci_dataset():
-    """Download the real LaMAGIC2 SFCI dataset and return a slice of entries."""
-    hf_hub_download = pytest.importorskip("huggingface_hub").hf_hub_download
-    try:
-        path = hf_hub_download(
-            DATASET_REPO,
-            DATASET_FILE,
-            repo_type="dataset",
-            local_dir=os.environ.get("LAMAGIC_TEST_CACHE", "/tmp/lamagic_test_data"),
-        )
-    except Exception as exc:  # network / hub unavailable
-        pytest.skip(f"Could not download {DATASET_REPO}/{DATASET_FILE}: {exc}")
+    """Download the real LaMAGIC2 SFCI dataset and return a slice of entries.
+
+    The dataset is public; no Hugging Face token is required. A download
+    failure is a real test failure, not a reason to skip.
+    """
+    from huggingface_hub import hf_hub_download
+
+    path = hf_hub_download(
+        DATASET_REPO,
+        DATASET_FILE,
+        repo_type="dataset",
+        local_dir=os.environ.get("LAMAGIC_TEST_CACHE", "/tmp/lamagic_test_data"),
+    )
 
     with open(path, "r") as handle:
         data = json.load(handle)
@@ -130,7 +133,7 @@ def test_sfci_parser_reconstructs_components(sfci_dataset):
 
 def test_sfci_netlist_builds_connected_graph(sfci_dataset):
     """Parsed netlists form a single connected circuit with all three terminals."""
-    nx = pytest.importorskip("networkx")
+    import networkx as nx
     from parsers.simulation import (
         convert_netlist_2_graph,
         read_transformer_output_shrink_canonical,
@@ -157,20 +160,17 @@ def test_sfci_netlist_builds_connected_graph(sfci_dataset):
 
 def test_model_training_step_on_real_data(sfci_dataset):
     """A real forward/backward step of the custom T5 yields a finite loss + grads."""
-    torch = pytest.importorskip("torch")
-    transformers = pytest.importorskip("transformers")
+    import torch
+    import transformers
 
-    try:
-        config = transformers.T5Config.from_pretrained(BASE_MODEL)
-        tokenizer = transformers.T5Tokenizer.from_pretrained(
-            BASE_MODEL,
-            model_max_length=512,
-            padding_side="right",
-            use_fast=False,
-            legacy=True,
-        )
-    except Exception as exc:  # network / hub unavailable
-        pytest.skip(f"Could not download {BASE_MODEL}: {exc}")
+    config = transformers.T5Config.from_pretrained(BASE_MODEL)
+    tokenizer = transformers.T5Tokenizer.from_pretrained(
+        BASE_MODEL,
+        model_max_length=512,
+        padding_side="right",
+        use_fast=False,
+        legacy=True,
+    )
 
     from analog_LLM.models.T5_transformer import (
         T5ForConditionalGeneration as T5Transformer,

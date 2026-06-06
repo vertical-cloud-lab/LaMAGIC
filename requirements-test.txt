@@ -15,3 +15,4 @@ tokenizers==0.15.2
 sentencepiece
 protobuf
 torch
+matplotlib

@@ -151,9 +151,11 @@ pip install -r requirements-test.txt
 pytest tests/
 ```
 
-The end-to-end tests require network access to the Hugging Face Hub; if the Hub
-is unreachable they skip (rather than fail) with a clear message. No GPU,
-trained checkpoint, or ngspice install is required.
+The end-to-end tests require network access to the Hugging Face Hub. Both the
+dataset (`turtleben/LaMAGIC-dataset`) and the `google/flan-t5-base` artifacts are
+public, so **no Hugging Face token/API key is required** — the tests download them
+directly and fail if the Hub is unreachable. No GPU, trained checkpoint, or
+ngspice install is required.
 
 ---
 
