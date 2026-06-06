@@ -1,0 +1,17 @@
+# Dependencies for the basic test suite (tests/).
+#
+# The unit tests in tests/test_topo_graph.py only need numpy + pytest.
+# The end-to-end tests in tests/test_lamagic_pipeline.py additionally exercise
+# the real released dataset/model, so they need the transformers stack.
+#
+# A CPU-only torch build is sufficient:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+pytest
+numpy
+networkx
+huggingface_hub
+transformers==4.36.0
+tokenizers==0.15.2
+sentencepiece
+protobuf
+torch

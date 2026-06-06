@@ -127,17 +127,33 @@ python experiment/lamagic2/trn_pure_tranformer_6comp.py
 
 ## Testing
 
-A lightweight smoke test is provided to verify that the repository is set up
-correctly without requiring the full training stack (PyTorch, transformers, a
-GPU, or model checkpoints). It exercises the self-contained graph utilities in
-`topo_data_util`.
+The `tests/` directory contains a basic test suite that can be used to
+sanity-check the repository. It has two layers:
 
-Install the test requirements (only `numpy` and `pytest` are needed) and run:
+* **Unit tests** (`tests/test_topo_graph.py`) for the self-contained graph
+  utilities in `topo_data_util` — these only need `numpy` + `pytest`.
+* **End-to-end tests** (`tests/test_lamagic_pipeline.py`) that run the *real*
+  pipeline against the *real* released artifacts: they download the
+  [LaMAGIC2 `SFCI_345comp` dataset](https://huggingface.co/datasets/turtleben/LaMAGIC-dataset)
+  and the `google/flan-t5-base` tokenizer/config, then
+  1. decode real SFCI formulation strings back into circuit netlists/graphs via
+     `parsers/simulation.py`, asserting the recovered devices and duty cycle
+     match the dataset, and
+  2. run a real forward/backward training step of the custom encoder-decoder
+     transformer in `analog_LLM/models/T5_transformer.py` (with the float
+     `vout`/`eff`/duty-cycle prefixes), asserting a finite loss and gradients.
+
+Install the test requirements and run:
 
 ```bash
-pip install numpy pytest
+pip install torch --index-url https://download.pytorch.org/whl/cpu  # CPU build is fine
+pip install -r requirements-test.txt
 pytest tests/
 ```
+
+The end-to-end tests require network access to the Hugging Face Hub; if the Hub
+is unreachable they skip (rather than fail) with a clear message. No GPU,
+trained checkpoint, or ngspice install is required.
 
 ---
 
