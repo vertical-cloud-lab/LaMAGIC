@@ -140,10 +140,30 @@ python experiment/lamagic2/generate_custom_topology.py \
 efficiency, and `--components` the available switches/inductors/capacitors. Pass
 `--simulate` (with an `ngspice` install, e.g. `apt-get install ngspice`) to close
 the loop and report the *realized* `Vout`/efficiency of the generated topology
-via the repository's ngspice verifier. A worked example mapping the
+via the repository's ngspice verifier.
+
+A single greedy decode is only one sample and may not hit the target. To run
+LaMAGIC2's intended **selection-by-simulation search**, add `--search`: it
+generates many candidate topologies (one greedy decode plus `--num-candidates`
+sampled decodes), simulates each in ngspice across all five duty-cycle options,
+optionally sweeps the most common dataset component budgets (`--sweep-budgets`),
+and selects the candidate + duty cycle whose *realized* `Vout`/efficiency are
+closest to the target:
+
+```bash
+python experiment/lamagic2/generate_custom_topology.py \
+    --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4 \
+    --search --sweep-budgets
+```
+
+`--search` requires an `ngspice` install. For the powder-doser rails the search
+hits the targets (12 V → 5 V: realized `Vout/Vin` 0.448 vs 0.4167; 5 V → 3.3 V:
+0.648 vs 0.66), whereas single greedy decodes do not.
+
+A worked example mapping the
 [powder-doser bench rig](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
 power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 — including the simulated
-operating points — is in
+operating points and the full-search results — is in
 [`experiment/lamagic2/results/powder_doser_topology.md`](experiment/lamagic2/results/powder_doser_topology.md).
 
 ### From an abstract topology to a structured design specification
@@ -197,7 +217,11 @@ sanity-check the repository. It has two layers:
      and
   3. run the real ngspice verification loop (`convert_netlist_cki` → `ngspice` →
      `calculate_efficiency`) on a decoded netlist, asserting a finite realized
-     `Vout`/efficiency.
+     `Vout`/efficiency, and
+  4. run the full selection-by-simulation **search** on the released SFCI
+     checkpoint (generate many candidates, simulate each across all duty-cycle
+     options, rank by closeness to the target) and assert it returns valid,
+     score-ordered candidates whose best match beats a single greedy decode.
 
 Install the test requirements and run:
 
