@@ -136,3 +136,53 @@ pipeline rather than producing a drop-in replacement regulator.
 
 The simulated numbers above are reproducible with the `--simulate` flag shown
 above; the ngspice netlists are written to the `--cki-path` (or a temp file).
+
+## 5. From abstract topology to a structured design specification
+
+The topologies in [§3](#3-generated-topologies) are deliberately **abstract**:
+anonymous switches/inductors/capacitors (`Sa0`, `Sb1`, `L2`, `C3`, `C4`) wired
+between `VIN`/`VOUT`/`GND`. That is what LaMAGIC2 emits, but it carries none of
+the project-specific information a downstream synthesis/layout tool (e.g. the
+[Celus](https://www.celus.io/) platform) needs. Per the request on
+[PR #2](https://github.com/vertical-cloud-lab/LaMAGIC/pull/2), we lift that
+abstract graph into a **structured, Celus-compatible design specification** that
+incorporates the real powder-doser components and constraints.
+
+[`generate_celus_spec.py`](../generate_celus_spec.py) assembles this from the
+real component/connectivity data published in
+[powder-doser PR #61](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
+(`hardware/test-module/README.md` BOM + pin/net table, `firmware/config.py`,
+`kicad/generate.py` symbol pin maps) and writes
+[`powder_doser_celus_spec.json`](powder_doser_celus_spec.json):
+
+```
+python experiment/lamagic2/generate_celus_spec.py \
+    --out experiment/lamagic2/results/powder_doser_celus_spec.json
+```
+
+The spec addresses each requested requirement:
+
+| # | Requirement | Where in the spec |
+| --- | --- | --- |
+| 1 | Explicit component typing & parametric data (real MPNs, no `C4`/`L2`/`Sb1`) | `components[].{type,mpn,parameters}` |
+| 2 | Pin-level connectivity | `components[].pins` (pin → net) |
+| 3 | Power & ground designations with net classes | `nets[].{class,domain,nominal_v,max_current_a}` |
+| 4 | Footprint & packaging constraints | `components[].footprint` (+ `design_rules.footprint_note`) |
+| 5 | Design rules — isolation/clearance | `design_rules.{net_classes,isolation}` |
+| 6 | Functional-block grouping | `functional_blocks` (Power Management, Control/MCU, Motor Driver Stage, Sensor/Haptic Interface) |
+| 7 | Interface protocols | `interfaces` (I2C, TTL-serial/UART, PWM, DC rails) |
+| 8 | Global system requirements | `global_requirements` (12 V input, 3.3/5 V logic, currents) |
+
+Crucially, the abstract LaMAGIC2 power stage is **tied to its concrete
+realization** in `power_stage_realization`: the two-switch + inductor + cap
+synchronous-buck structure LaMAGIC2 proposes for 12 V → 5 V is integrated by the
+off-the-shelf **Pololu D24V22F5** buck (`U1`, with input/output bulk caps `C1`/`C2`),
+and the 5 V → 3.3 V stage is realized by the **Pico W on-board LDO** (`U2`). So the
+abstract `Sa0`/`Sb1`/`L2`/`C3`/`C4` nodes become real, parameterized parts wired at
+the pin level, with `GND`/power net classes, footprints, isolation rules, and
+functional blocks — the structured electronic design specification the request
+asked for.
+
+The spec is validated for self-consistency (every pin references a declared net,
+every component belongs to exactly one functional block, all interface nets
+exist) both by the generator and by [`tests/test_celus_spec.py`](../../../tests/test_celus_spec.py).

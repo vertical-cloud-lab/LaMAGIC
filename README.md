@@ -146,6 +146,29 @@ power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 — including the sim
 operating points — is in
 [`experiment/lamagic2/results/powder_doser_topology.md`](experiment/lamagic2/results/powder_doser_topology.md).
 
+### From an abstract topology to a structured design specification
+
+LaMAGIC2 emits an *abstract* node-edge topology (anonymous `Sa0`/`Sb1`/`L2`/`C3`/`C4`
+between `VIN`/`VOUT`/`GND`). To turn that into a structured electronic design
+specification a synthesis/layout tool (e.g. the Celus platform) can consume,
+`experiment/lamagic2/generate_celus_spec.py` lifts the abstract power stage into a
+Celus-compatible block-diagram / JSON-netlist using the real powder-doser
+components from
+[PR #61](https://github.com/vertical-cloud-lab/powder-doser/pull/61):
+
+```bash
+python experiment/lamagic2/generate_celus_spec.py \
+    --out experiment/lamagic2/results/powder_doser_celus_spec.json
+```
+
+The emitted [`powder_doser_celus_spec.json`](experiment/lamagic2/results/powder_doser_celus_spec.json)
+provides explicit component typing with manufacturer part numbers and parametric
+data, pin-level connectivity, `GND`/power net classes, footprints, isolation/clearance
+design rules, functional-block grouping, interface protocols (I2C, TTL-serial,
+PWM, DC rails) and global system requirements — and ties the abstract LaMAGIC2
+nodes to their concrete realization (the Pololu D24V22F5 buck and the Pico W LDO).
+See [§5 of the worked example](experiment/lamagic2/results/powder_doser_topology.md#5-from-abstract-topology-to-a-structured-design-specification).
+
 ---
 
 ## Testing
@@ -155,6 +178,12 @@ sanity-check the repository. It has two layers:
 
 * **Unit tests** (`tests/test_topo_graph.py`) for the self-contained graph
   utilities in `topo_data_util` — these only need `numpy` + `pytest`.
+* **Design-spec tests** (`tests/test_celus_spec.py`) that build the
+  Celus-compatible structured design specification from
+  `experiment/lamagic2/generate_celus_spec.py` and assert each required section
+  (component typing/MPNs, pin-level connectivity, net classes, footprints,
+  design rules, functional blocks, interface protocols, global requirements) is
+  present and self-consistent — these run offline with no GPU/network.
 * **End-to-end tests** (`tests/test_lamagic_pipeline.py`) that run the *real*
   pipeline against the *real* released artifacts: they download the
   [LaMAGIC2 `SFCI_345comp` dataset](https://huggingface.co/datasets/turtleben/LaMAGIC-dataset)
