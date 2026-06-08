@@ -122,6 +122,25 @@ python experiment/lamagic2/trn_pure_tranformer_6comp.py
   * [LaMAGIC2-6Comp-SFCI-dnum1000](https://huggingface.co/turtleben/LaMAGIC2-6Comp-SFCI-dnum1000)
   * [LaMAGIC2-6Comp-SFCI-dnum2000](https://huggingface.co/turtleben/LaMAGIC2-6Comp-SFCI-dnum2000)
 
+---
+
+## Generating a topology for a custom target
+
+To ask the released SFCI checkpoint for a converter that hits an arbitrary
+target (instead of sweeping the released dataset), use
+`experiment/lamagic2/generate_custom_topology.py`. It runs the real model
+end-to-end on CPU and prints/draws the generated topology:
+
+```bash
+python experiment/lamagic2/generate_custom_topology.py \
+    --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4
+```
+
+`--vout` is the target voltage conversion ratio `Vout/Vin`, `--eff` the target
+efficiency, and `--components` the available switches/inductors/capacitors. A
+worked example mapping the [powder-doser bench rig](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
+power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 is in
+[`experiment/lamagic2/results/powder_doser_topology.md`](experiment/lamagic2/results/powder_doser_topology.md).
 
 ---
 
