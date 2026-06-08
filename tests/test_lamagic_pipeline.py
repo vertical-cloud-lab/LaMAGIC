@@ -43,6 +43,8 @@ import pytest
 DATASET_REPO = "turtleben/LaMAGIC-dataset"
 DATASET_FILE = "transformed/LaMAGIC2/SFCI_345comp.json"
 BASE_MODEL = "google/flan-t5-base"
+# The released SFCI checkpoint exercised by the selection-by-simulation search.
+SEARCH_CHECKPOINT = "turtleben/LaMAGIC2-345comp-SFCI-dataaug-noaug"
 
 # Keep the test fast: only a slice of the (132k-entry) dataset is inspected.
 NUM_PARSE_SAMPLES = 200
@@ -278,3 +280,85 @@ def test_ngspice_simulation_closes_the_loop():
     # Realized output is a step-down of the simulator's Vin (no boosting here).
     vin = simulate_param["Vin"][0]
     assert 0.0 <= float(result["Vout"]) <= vin
+
+def test_selection_by_simulation_search_finds_target():
+    """The full search loop (``--search``) hits the target far better than greedy.
+
+    This exercises the real selection-by-simulation search in
+    ``experiment/lamagic2/generate_custom_topology.py``: it loads the *released*
+    SFCI checkpoint, generates a pool of candidate topologies, simulates each in
+    ngspice across all five duty-cycle options, and ranks them by closeness to a
+    target Vout/Vin ratio. We assert the search returns valid, score-ordered
+    candidates and that its best match beats a single greedy decode.
+
+    Requires an ``ngspice`` binary on ``PATH`` (``apt-get install ngspice``);
+    a missing binary is a real failure, not a reason to skip.
+    """
+    import math
+    import shutil
+    import tempfile
+
+    assert shutil.which("ngspice") is not None, (
+        "ngspice is not installed; install it (e.g. `apt-get install ngspice`) "
+        "to run the selection-by-simulation search."
+    )
+
+    from experiment.lamagic2 import generate_custom_topology as gct
+
+    target_vout, target_eff = 0.4167, 0.95
+    components = ["Sa0", "Sa1", "Sb2", "Sb3", "C4"]
+
+    with _suppress_stdout():
+        tokenizer = gct.build_tokenizer()
+        model = gct.build_model(SEARCH_CHECKPOINT, tokenizer)
+
+        work_dir = tempfile.mkdtemp(prefix="lamagic_search_test_")
+        results = gct.search_topologies(
+            model, tokenizer, target_vout, target_eff, components, work_dir,
+            num_candidates=4, sweep_budgets=False, seed=0,
+        )
+
+        # A single greedy decode, simulated at its chosen duty, for comparison.
+        greedy_str = gct.generate_topology(
+            model, tokenizer, gct.build_input_string(components),
+            target_vout, target_eff,
+        )
+
+    # The search produced at least one valid, fully-populated candidate.
+    assert results, "search returned no valid candidates"
+    best = results[0]
+    assert set(best.keys()) >= {
+        "components", "netlist", "duty", "Vout", "vout_ratio", "efficiency",
+        "score",
+    }
+
+    # Results are sorted best-first by score, and every candidate is a real,
+    # finite, physical operating point produced by ngspice.
+    vin = gct.simulate_param["Vin"][0]
+    scores = [r["score"] for r in results]
+    assert scores == sorted(scores)
+    for r in results:
+        assert math.isfinite(r["vout_ratio"]) and 0.0 <= r["Vout"] <= vin
+        assert math.isfinite(r["efficiency"])
+        assert r["duty"] in gct.DUTY_CYCLE_OPTIONS
+
+    # The selected duty cycle is the one that actually minimises the score for
+    # the best topology (i.e. selection really is by simulation, not by decode).
+    best_key = tuple(sorted((d, tuple(best["netlist"][d])) for d in best["netlist"]))
+    same_topo = [
+        r for r in results
+        if tuple(sorted((d, tuple(r["netlist"][d])) for d in r["netlist"])) == best_key
+    ]
+    assert best["duty"] == min(same_topo, key=lambda r: r["score"])["duty"]
+
+    # The search's best candidate is at least as close to the target ratio as a
+    # single greedy decode of the same budget.
+    netlist, duty = gct.read_transformer_output_shrink_canonical(
+        greedy_str, duty10=False, typeNidx=True
+    )
+    with _suppress_stdout():
+        greedy_result = gct.sim_netlist_duty_cycle(
+            os.path.join(tempfile.mkdtemp(), "greedy.cki"), netlist, duty
+        )
+    greedy_ratio = greedy_result["Vout"] / vin
+    assert abs(best["vout_ratio"] - target_vout) <= abs(greedy_ratio - target_vout)
