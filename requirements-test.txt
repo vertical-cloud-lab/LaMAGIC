@@ -6,6 +6,10 @@
 #
 # A CPU-only torch build is sufficient:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# The ngspice verification test (test_ngspice_simulation_closes_the_loop)
+# additionally needs the system `ngspice` binary, which is not pip-installable:
+#   sudo apt-get install -y ngspice    # (or: conda install -c conda-forge ngspice)
 pytest
 numpy
 networkx

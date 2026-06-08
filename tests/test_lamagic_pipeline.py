@@ -8,7 +8,7 @@ the *real* released artifacts:
 * the real ``google/flan-t5-base`` tokenizer/config used by the training
   scripts.
 
-They validate two core pieces of the repository:
+They validate three core pieces of the repository:
 
 1. The SFCI circuit *formulation* decoder in ``parsers/simulation.py`` — i.e.
    that a real model-style output string is parsed back into the correct
@@ -17,10 +17,15 @@ They validate two core pieces of the repository:
    ``analog_LLM/models/T5_transformer.py`` — i.e. that a real training
    forward/backward step (with the float ``vout``/``eff``/duty-cycle prefixes)
    produces a finite loss and gradients.
+3. The ngspice verification loop in ``parsers/simulation.py`` — i.e. that a
+   decoded netlist is converted to a ``.cki`` deck, simulated with the real
+   ``ngspice`` binary, and reduced to a realized ``Vout``/efficiency.
 
 Network access to the Hugging Face Hub is required. Both the dataset and the
 ``google/flan-t5-base`` artifacts are public, so no token/API key is needed.
 The tests download them directly and fail loudly if the Hub is unreachable.
+The ngspice loop additionally requires an ``ngspice`` binary on ``PATH``
+(``apt-get install ngspice``).
 
 Run with::
 
@@ -221,3 +226,55 @@ def test_model_training_step_on_real_data(sfci_dataset):
     )
     assert torch.isfinite(grad_total)
     assert grad_total > 0
+
+
+def test_ngspice_simulation_closes_the_loop():
+    """The real ngspice verifier simulates a decoded netlist end-to-end.
+
+    This exercises ``parsers/simulation.py``'s full
+    ``convert_netlist_cki`` -> ``ngspice`` -> ``calculate_efficiency`` loop on a
+    real buck-style netlist (the one the released SFCI checkpoint generates for
+    the powder-doser 12 V -> 5 V rail). It requires an ``ngspice`` binary on
+    ``PATH`` (``apt-get install ngspice``); a missing binary is a real failure,
+    not a reason to skip.
+    """
+    import math
+    import shutil
+    import tempfile
+
+    from parsers.simulation import sim_netlist_duty_cycle, simulate_param
+
+    assert shutil.which("ngspice") is not None, (
+        "ngspice is not installed; install it (e.g. `apt-get install ngspice`) "
+        "to run the simulation loop."
+    )
+
+    # Decoded SFCI topology for vout=0.4167, eff=0.95 (two-switch buck): each
+    # device connects to exactly two nodes (IN/OUT/0 are VIN/VOUT/GND).
+    netlist = {
+        "C3": ["0", "9"],
+        "C4": ["IN", "OUT"],
+        "L2": ["IN", "10"],
+        "Sa0": ["9", "10"],
+        "Sb1": ["OUT", "10"],
+    }
+    duty_cycle = 0.3
+
+    cki_path = os.path.join(tempfile.mkdtemp(prefix="lamagic_sim_"), "topology.cki")
+    with _suppress_stdout():
+        result = sim_netlist_duty_cycle(cki_path, netlist, duty_cycle)
+
+    # The verifier returns the documented result schema.
+    assert set(result.keys()) >= {"result_valid", "efficiency", "Vout", "error_msg"}
+
+    # ngspice actually solved the circuit (no transient/alignment failure), so
+    # the realized operating point is a finite, physical number.
+    assert result["error_msg"] == "None"
+    assert bool(result["result_valid"]) is True
+    assert math.isfinite(float(result["Vout"]))
+    assert math.isfinite(float(result["efficiency"]))
+    # Efficiency of a real solved circuit is a valid fraction.
+    assert 0.0 <= float(result["efficiency"]) <= 1.0
+    # Realized output is a step-down of the simulator's Vin (no boosting here).
+    vin = simulate_param["Vin"][0]
+    assert 0.0 <= float(result["Vout"]) <= vin

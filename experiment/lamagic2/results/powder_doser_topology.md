@@ -8,8 +8,9 @@ so the model's proposed converter topologies can be compared against the
 off-the-shelf regulators chosen in that design.
 
 Everything below is reproducible on CPU with
-[`generate_custom_topology.py`](generate_custom_topology.py) — no GPU, training,
-or ngspice install required.
+[`generate_custom_topology.py`](generate_custom_topology.py) — no GPU or training
+required. Topology generation needs no ngspice; the ngspice verification in
+[§4](#4-closing-the-loop-with-ngspice) additionally requires an `ngspice` install.
 
 ## 1. Specifications extracted from powder-doser PR #61
 
@@ -94,10 +95,44 @@ Both proposals are single connected graphs containing `VIN`/`VOUT`/`GND` and use
 the two-switch + inductor + capacitor structure of a synchronous buck, which is
 consistent with the off-the-shelf D24V22F5 buck regulator chosen in PR #61.
 
-## 4. Caveat
+## 4. Closing the loop with ngspice
 
 LaMAGIC2 proposes a **topology**; it does not by itself guarantee the simulated
-operating point. To verify that a generated circuit actually hits the target
-`Vout`/efficiency, close the loop with the repository's ngspice simulation
-(`parsers/simulation.py`) — that step needs an ngspice install and is not run
-here.
+operating point. The repository ships an ngspice-based verifier
+(`parsers/simulation.py`), so we close the loop and actually simulate each
+generated circuit. Install ngspice (`apt-get install ngspice` or
+`conda install -c conda-forge ngspice`) and pass `--simulate`:
+
+```
+python experiment/lamagic2/generate_custom_topology.py \
+    --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4 --simulate
+```
+
+The verifier uses the repository's standard operating-point parameters
+(`simulate_param` in `parsers/simulation.py`: `Vin = 100 V`, switching
+`Frequency = 1 MHz`, `Rout = 50 Ω`, `L = 100 µH`, `C = 10 µF`), reports the
+realized `Vout/Vin` and efficiency, and is what LaMAGIC2's own evaluation uses to
+score a candidate. Running it on the two generated topologies gives:
+
+| Target rail | Target Vout/Vin | Realized Vout/Vin | Target eff | Realized eff | `result_valid` |
+| --- | --- | --- | --- | --- | --- |
+| 12 V → 5 V (`duty=0.3`) | 0.4167 | **0.030** | 0.95 | **0.022** | True |
+| 5 V → 3.3 V (`duty=0.7`) | 0.66 | **0.384** | 0.95 | **0.522** | True |
+
+Both netlists are simulatable (the transient solves and `result_valid` is
+`True`), but **neither single greedy generation hits its target operating
+point** under the default simulation parameters: the realized conversion ratios
+and efficiencies are well below the requested values.
+
+This is the honest, end-to-end result and is exactly why the loop matters: a
+proposed topology is only a hypothesis until ngspice confirms it. Getting from
+"plausible structure" to "meets the spec" generally requires LaMAGIC2's full
+search loop — sampling/sweeping the conditioning duty-cycle options and
+component budgets and selecting the candidate whose **simulated** `Vout`/`eff`
+match the target — rather than a single greedy decode. For the powder-doser
+bench rig specifically, the off-the-shelf Pololu D24V22F5 buck chosen in PR #61
+remains the right call; this example demonstrates the LaMAGIC2 → ngspice
+pipeline rather than producing a drop-in replacement regulator.
+
+The simulated numbers above are reproducible with the `--simulate` flag shown
+above; the ngspice netlists are written to the `--cki-path` (or a temp file).

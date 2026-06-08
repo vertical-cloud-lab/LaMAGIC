@@ -4,7 +4,7 @@ Unlike the training/validation entry points (which sweep the released dataset),
 this script lets you ask the **released** LaMAGIC2 SFCI checkpoint for a circuit
 that hits an arbitrary target, e.g. "step 12 V down to 5 V at high efficiency".
 
-It runs the real model end-to-end on CPU (no GPU/ngspice required):
+It runs the real model end-to-end on CPU (no GPU required):
 
 1. downloads the released SFCI checkpoint
    (``turtleben/LaMAGIC2-345comp-SFCI-dataaug-noaug``) and the
@@ -14,22 +14,27 @@ It runs the real model end-to-end on CPU (no GPU/ngspice required):
    component budget (``--components``),
 3. runs ``model.generate`` to produce the topology string,
 4. decodes it with the real parser in ``parsers/simulation.py`` into a netlist
-   and a circuit graph, and prints the result (optionally rendering a PNG).
+   and a circuit graph, and prints the result (optionally rendering a PNG), and
+5. optionally (``--simulate``) closes the loop with the repository's ngspice
+   simulation to report the *actually realized* ``Vout/Vin`` ratio and
+   efficiency of the generated topology.
 
 Example (the powder-doser 12 V -> 5 V bench-rig buck rail)::
 
     python experiment/lamagic2/generate_custom_topology.py \
-        --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4
+        --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4 --simulate
 
 The conditioning ratio/efficiency are passed to the model exactly as the
 training data encodes them (raw ``Vout/Vin`` and raw efficiency in ``[0, 1]``).
 The model proposes a topology; it does not by itself guarantee the simulated
-operating point — close the loop with the repo's ngspice simulation if you need
-verified Vout/efficiency.
+operating point. Pass ``--simulate`` to verify the realized Vout/efficiency with
+ngspice (requires an ``ngspice`` install, e.g. ``apt-get install ngspice``).
 """
 
 import argparse
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import torch
@@ -46,6 +51,8 @@ from analog_LLM.models.T5_transformer import (  # noqa: E402
 from parsers.simulation import (  # noqa: E402
     convert_netlist_2_graph,
     read_transformer_output_shrink_canonical,
+    simulate_param,
+    sim_netlist_duty_cycle,
 )
 
 DEFAULT_CHECKPOINT = "turtleben/LaMAGIC2-345comp-SFCI-dataaug-noaug"
@@ -135,6 +142,26 @@ def node_token_universe():
     return tokens
 
 
+def simulate_topology(netlist, duty_cycle, cki_path):
+    """Close the loop with ngspice: simulate the netlist and report the result.
+
+    Returns the result dict from ``parsers.simulation.calculate_efficiency``,
+    augmented with the realized ``Vout/Vin`` ratio. Requires an ``ngspice``
+    binary on ``PATH`` (e.g. ``apt-get install ngspice``).
+    """
+    if shutil.which("ngspice") is None:
+        raise RuntimeError(
+            "ngspice is not installed; install it to simulate generated "
+            "topologies (e.g. `apt-get install ngspice` or `conda install -c "
+            "conda-forge ngspice`)."
+        )
+    result = sim_netlist_duty_cycle(str(cki_path), netlist, duty_cycle)
+    vin = simulate_param["Vin"][0]
+    realized = result.get("Vout", float("nan"))
+    result["vout_ratio"] = realized / vin if vin else float("nan")
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--vout", type=float, required=True, help="Target voltage conversion ratio Vout/Vin.")
@@ -145,6 +172,16 @@ def main(argv=None):
     )
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="HF repo id or local path of the SFCI checkpoint.")
     parser.add_argument("--render", metavar="PNG", default=None, help="Optional path to save a topology graph PNG.")
+    parser.add_argument(
+        "--simulate", action="store_true",
+        help="Close the loop with ngspice to report the realized Vout/efficiency "
+             "(requires an ngspice install).",
+    )
+    parser.add_argument(
+        "--cki-path", default=None,
+        help="Where to write the ngspice .cki netlist used by --simulate "
+             "(default: a temporary file).",
+    )
     args = parser.parse_args(argv)
 
     tokenizer = build_tokenizer()
@@ -172,6 +209,22 @@ def main(argv=None):
     print("\nCircuit graph:")
     print("  nodes:", sorted(graph.nodes))
     print("  edges:", sorted(tuple(sorted(e)) for e in graph.edges))
+
+    if args.simulate:
+        cki_path = args.cki_path
+        if cki_path is None:
+            cki_path = Path(tempfile.mkdtemp(prefix="lamagic_sim_")) / "topology.cki"
+        result = simulate_topology(netlist, duty_cycle, cki_path)
+        vin = simulate_param["Vin"][0]
+        print("\nngspice verification (Vin = %g V, duty = %g):" % (vin, duty_cycle))
+        print("  realized Vout      :", result.get("Vout"))
+        print("  realized Vout/Vin  :", result.get("vout_ratio"))
+        print("  target  Vout/Vin   :", args.vout)
+        print("  realized efficiency:", result.get("efficiency"))
+        print("  target  efficiency :", args.eff)
+        print("  result_valid       :", result.get("result_valid"))
+        if result.get("error_msg") not in (None, "None"):
+            print("  error_msg          :", result.get("error_msg"))
 
     if args.render:
         import matplotlib

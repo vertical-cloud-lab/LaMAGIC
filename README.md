@@ -137,9 +137,13 @@ python experiment/lamagic2/generate_custom_topology.py \
 ```
 
 `--vout` is the target voltage conversion ratio `Vout/Vin`, `--eff` the target
-efficiency, and `--components` the available switches/inductors/capacitors. A
-worked example mapping the [powder-doser bench rig](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
-power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 is in
+efficiency, and `--components` the available switches/inductors/capacitors. Pass
+`--simulate` (with an `ngspice` install, e.g. `apt-get install ngspice`) to close
+the loop and report the *realized* `Vout`/efficiency of the generated topology
+via the repository's ngspice verifier. A worked example mapping the
+[powder-doser bench rig](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
+power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 — including the simulated
+operating points — is in
 [`experiment/lamagic2/results/powder_doser_topology.md`](experiment/lamagic2/results/powder_doser_topology.md).
 
 ---
@@ -157,24 +161,31 @@ sanity-check the repository. It has two layers:
   and the `google/flan-t5-base` tokenizer/config, then
   1. decode real SFCI formulation strings back into circuit netlists/graphs via
      `parsers/simulation.py`, asserting the recovered devices and duty cycle
-     match the dataset, and
+     match the dataset,
   2. run a real forward/backward training step of the custom encoder-decoder
      transformer in `analog_LLM/models/T5_transformer.py` (with the float
-     `vout`/`eff`/duty-cycle prefixes), asserting a finite loss and gradients.
+     `vout`/`eff`/duty-cycle prefixes), asserting a finite loss and gradients,
+     and
+  3. run the real ngspice verification loop (`convert_netlist_cki` → `ngspice` →
+     `calculate_efficiency`) on a decoded netlist, asserting a finite realized
+     `Vout`/efficiency.
 
 Install the test requirements and run:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu  # CPU build is fine
 pip install -r requirements-test.txt
+sudo apt-get install -y ngspice  # for the ngspice verification test
 pytest tests/
 ```
 
 The end-to-end tests require network access to the Hugging Face Hub. Both the
 dataset (`turtleben/LaMAGIC-dataset`) and the `google/flan-t5-base` artifacts are
 public, so **no Hugging Face token/API key is required** — the tests download them
-directly and fail if the Hub is unreachable. No GPU, trained checkpoint, or
-ngspice install is required.
+directly and fail if the Hub is unreachable. The ngspice verification test
+requires an `ngspice` binary on `PATH` (`apt-get install ngspice` or
+`conda install -c conda-forge ngspice`). No GPU or trained checkpoint is
+required.
 
 ---
 
