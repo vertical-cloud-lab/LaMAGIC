@@ -122,6 +122,123 @@ python experiment/lamagic2/trn_pure_tranformer_6comp.py
   * [LaMAGIC2-6Comp-SFCI-dnum1000](https://huggingface.co/turtleben/LaMAGIC2-6Comp-SFCI-dnum1000)
   * [LaMAGIC2-6Comp-SFCI-dnum2000](https://huggingface.co/turtleben/LaMAGIC2-6Comp-SFCI-dnum2000)
 
+---
+
+## Generating a topology for a custom target
+
+To ask the released SFCI checkpoint for a converter that hits an arbitrary
+target (instead of sweeping the released dataset), use
+`experiment/lamagic2/generate_custom_topology.py`. It runs the real model
+end-to-end on CPU and prints/draws the generated topology:
+
+```bash
+python experiment/lamagic2/generate_custom_topology.py \
+    --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4
+```
+
+`--vout` is the target voltage conversion ratio `Vout/Vin`, `--eff` the target
+efficiency, and `--components` the available switches/inductors/capacitors. Pass
+`--simulate` (with an `ngspice` install, e.g. `apt-get install ngspice`) to close
+the loop and report the *realized* `Vout`/efficiency of the generated topology
+via the repository's ngspice verifier.
+
+A single greedy decode is only one sample and may not hit the target. To run
+LaMAGIC2's intended **selection-by-simulation search**, add `--search`: it
+generates many candidate topologies (one greedy decode plus `--num-candidates`
+sampled decodes), simulates each in ngspice across all five duty-cycle options,
+optionally sweeps the most common dataset component budgets (`--sweep-budgets`),
+and selects the candidate + duty cycle whose *realized* `Vout`/efficiency are
+closest to the target:
+
+```bash
+python experiment/lamagic2/generate_custom_topology.py \
+    --vout 0.4167 --eff 0.95 --components Sa0 Sb1 L2 C3 C4 \
+    --search --sweep-budgets
+```
+
+`--search` requires an `ngspice` install. For the powder-doser rails the search
+hits the targets (12 V → 5 V: realized `Vout/Vin` 0.448 vs 0.4167; 5 V → 3.3 V:
+0.648 vs 0.66), whereas single greedy decodes do not.
+
+A worked example mapping the
+[powder-doser bench rig](https://github.com/vertical-cloud-lab/powder-doser/pull/61)
+power rails (12 V → 5 V and 5 V → 3.3 V) onto LaMAGIC2 — including the simulated
+operating points and the full-search results — is in
+[`experiment/lamagic2/results/powder_doser_topology.md`](experiment/lamagic2/results/powder_doser_topology.md).
+
+### From an abstract topology to a structured design specification
+
+LaMAGIC2 emits an *abstract* node-edge topology (anonymous `Sa0`/`Sb1`/`L2`/`C3`/`C4`
+between `VIN`/`VOUT`/`GND`). To turn that into a structured electronic design
+specification a synthesis/layout tool (e.g. the Celus platform) can consume,
+`experiment/lamagic2/generate_celus_spec.py` lifts the abstract power stage into a
+Celus-compatible block-diagram / JSON-netlist using the real powder-doser
+components from
+[PR #61](https://github.com/vertical-cloud-lab/powder-doser/pull/61):
+
+```bash
+python experiment/lamagic2/generate_celus_spec.py \
+    --out experiment/lamagic2/results/powder_doser_celus_spec.json
+```
+
+The emitted [`powder_doser_celus_spec.json`](experiment/lamagic2/results/powder_doser_celus_spec.json)
+provides explicit component typing with manufacturer part numbers and parametric
+data, pin-level connectivity, `GND`/power net classes, footprints, isolation/clearance
+design rules, functional-block grouping, interface protocols (I2C, TTL-serial,
+PWM, DC rails) and global system requirements — and ties the abstract LaMAGIC2
+nodes to their concrete realization (the Pololu D24V22F5 buck and the Pico W LDO).
+See [§5 of the worked example](experiment/lamagic2/results/powder_doser_topology.md#5-from-abstract-topology-to-a-structured-design-specification).
+
+---
+
+## Testing
+
+The `tests/` directory contains a basic test suite that can be used to
+sanity-check the repository. It has two layers:
+
+* **Unit tests** (`tests/test_topo_graph.py`) for the self-contained graph
+  utilities in `topo_data_util` — these only need `numpy` + `pytest`.
+* **Design-spec tests** (`tests/test_celus_spec.py`) that build the
+  Celus-compatible structured design specification from
+  `experiment/lamagic2/generate_celus_spec.py` and assert each required section
+  (component typing/MPNs, pin-level connectivity, net classes, footprints,
+  design rules, functional blocks, interface protocols, global requirements) is
+  present and self-consistent — these run offline with no GPU/network.
+* **End-to-end tests** (`tests/test_lamagic_pipeline.py`) that run the *real*
+  pipeline against the *real* released artifacts: they download the
+  [LaMAGIC2 `SFCI_345comp` dataset](https://huggingface.co/datasets/turtleben/LaMAGIC-dataset)
+  and the `google/flan-t5-base` tokenizer/config, then
+  1. decode real SFCI formulation strings back into circuit netlists/graphs via
+     `parsers/simulation.py`, asserting the recovered devices and duty cycle
+     match the dataset,
+  2. run a real forward/backward training step of the custom encoder-decoder
+     transformer in `analog_LLM/models/T5_transformer.py` (with the float
+     `vout`/`eff`/duty-cycle prefixes), asserting a finite loss and gradients,
+     and
+  3. run the real ngspice verification loop (`convert_netlist_cki` → `ngspice` →
+     `calculate_efficiency`) on a decoded netlist, asserting a finite realized
+     `Vout`/efficiency, and
+  4. run the full selection-by-simulation **search** on the released SFCI
+     checkpoint (generate many candidates, simulate each across all duty-cycle
+     options, rank by closeness to the target) and assert it returns valid,
+     score-ordered candidates whose best match beats a single greedy decode.
+
+Install the test requirements and run:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu  # CPU build is fine
+pip install -r requirements-test.txt
+sudo apt-get install -y ngspice  # for the ngspice verification test
+pytest tests/
+```
+
+The end-to-end tests require network access to the Hugging Face Hub. Both the
+dataset (`turtleben/LaMAGIC-dataset`) and the `google/flan-t5-base` artifacts are
+public, so **no Hugging Face token/API key is required** — the tests download them
+directly and fail if the Hub is unreachable. The ngspice verification test
+requires an `ngspice` binary on `PATH` (`apt-get install ngspice` or
+`conda install -c conda-forge ngspice`). No GPU or trained checkpoint is
+required.
 
 ---
 
